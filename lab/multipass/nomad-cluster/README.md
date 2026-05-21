@@ -1,199 +1,283 @@
-# Nomad Cluster
+# Nomad Cluster - Production-Like Multi-Node Deployment
 
-A production-like Nomad cluster deployment with 3 servers and 2 clients using Multipass VMs. Includes optional Consul and Vault integration.
+A production-like Nomad cluster with 3 servers and 2 clients, featuring TLS encryption, ACLs, and optional Consul/Vault integration. Ideal for testing high-availability scenarios, service mesh integration, and container orchestration.
 
-## Overview
+## Table of Contents
 
-This configuration deploys a complete Nomad cluster suitable for:
-- Production-like testing and validation
-- Multi-node cluster behavior testing
-- High availability scenarios
-- Service mesh integration with Consul Connect
-- Secrets management with Vault workload identity
-- Container orchestration with Docker and Podman
+- [Architecture Overview](#architecture-overview)
+- [Directory Structure](#directory-structure)
+- [Infrastructure Components](#infrastructure-components)
+- [Ansible Playbooks Explained](#ansible-playbooks-explained)
+- [Configuration Templates](#configuration-templates)
+- [Deployment Guide](#deployment-guide)
+- [Nomad and Consul Integration](#nomad-and-consul-integration)
+- [Post-Deployment Configuration](#post-deployment-configuration)
+- [Usage Examples](#usage-examples)
+- [Troubleshooting](#troubleshooting)
 
-## Architecture
+## Architecture Overview
 
-- **3 Nomad Servers**: Raft consensus cluster with WAL log store
-- **2 Nomad Clients**: Worker nodes with Docker and Podman drivers
-- **VM Resources**: 
-  - Servers: 2 CPUs, 4GiB RAM each
-  - Clients: Default CPUs, 4GiB RAM each
-- **Region**: lcy1 (London)
-- **Features**:
-  - TLS encryption for all communication
-  - ACLs enabled for security
-  - Prometheus metrics enabled
-  - Nomad UI with custom label
-  - Optional Consul integration for service discovery
-  - Optional Vault integration for secrets
-  - CNI networking with Smuggle (VXLAN overlay)
-  - DNS resolution via dnsmasq → CoreDNS
+### Cluster Topology
 
-## What the Terraform Does
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Nomad Cluster (lcy1)                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │ Nomad Server │  │ Nomad Server │  │ Nomad Server │      │
+│  │   (Leader)   │  │  (Follower)  │  │  (Follower)  │      │
+│  │              │  │              │  │              │      │
+│  │ 2 CPU        │  │ 2 CPU        │  │ 2 CPU        │      │
+│  │ 4GiB RAM     │  │ 4GiB RAM     │  │ 4GiB RAM     │      │
+│  │              │  │              │  │              │      │
+│  │ Consul Agent │  │ Consul Agent │  │ Consul Agent │      │
+│  │ (optional)   │  │ (optional)   │  │ (optional)   │      │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
+│         │                 │                 │               │
+│         └─────────────────┼─────────────────┘               │
+│                           │ Raft Consensus                  │
+│         ┌─────────────────┼─────────────────┐               │
+│         │                 │                 │               │
+│  ┌──────▼───────┐  ┌──────▼───────┐                        │
+│  │ Nomad Client │  │ Nomad Client │                        │
+│  │              │  │              │                        │
+│  │ Default CPU  │  │ Default CPU  │                        │
+│  │ 4GiB RAM     │  │ 4GiB RAM     │                        │
+│  │              │  │              │                        │
+│  │ Docker       │  │ Docker       │                        │
+│  │ Podman       │  │ Podman       │                        │
+│  │ CNI/Smuggle  │  │ CNI/Smuggle  │                        │
+│  │ dnsmasq      │  │ dnsmasq      │                        │
+│  │ Consul Agent │  │ Consul Agent │                        │
+│  │ (optional)   │  │ (optional)   │                        │
+│  └──────────────┘  └──────────────┘                        │
+│                                                               │
+└─────────────────────────────────────────────────────────────┘
+```
 
-[`main.tf`](main.tf:1) provisions the infrastructure:
+### Key Features
 
-1. **Generates TLS Certificates** (via `tls` module):
-   - Creates CA certificate
-   - Stores in `.tls/` directory
-   - Used for secure Nomad communication
+- **High Availability**: 3-server Raft consensus cluster
+- **Security**: TLS encryption + ACLs enabled
+- **Observability**: Prometheus metrics, debug logging
+- **Container Runtimes**: Docker + Podman drivers
+- **Networking**: CNI with Smuggle (VXLAN overlay)
+- **DNS**: dnsmasq → CoreDNS integration
+- **Service Discovery**: Optional Consul integration
+- **Secrets Management**: Optional Vault workload identity
+- **Storage**: WAL-based Raft log store (64MB segments)
 
-2. **Creates Nomad Server VMs** (via `multipass-compute` module):
-   - 3 instances: `nomad-server-<random-id>`
-   - Specs: 2 CPUs, 4GiB RAM each
-   - Ansible group: `nomad_server`
+### Region Configuration
 
-3. **Creates Nomad Client VMs** (via `multipass-compute` module):
-   - 2 instances: `nomad-client-<random-id>`
-   - Specs: Default CPUs, 4GiB RAM each
-   - Ansible group: `nomad_client`
+- **Region**: `lcy1` (London)
+- **Datacenter**: `lcy1` (when using Consul)
+- **UI Label**: "local lcy1" (purple background)
 
-4. **Runs Ansible Provisioning** (via `ansible-provision` module):
-   - Executes [`playbook_all.yaml`](playbook_all.yaml:1)
-   - Configures servers and clients
-   - Optional: Passes `consul_address` and `vault_address` variables
+## Directory Structure
 
-5. **Outputs**:
-   - SSH commands for all nodes
-   - Rsync commands for code deployment
-   - Nomad HTTPS API endpoints
-   - CA certificate (for API access)
-   - Server IP addresses
+```
+nomad-cluster/
+├── main.tf                          # Terraform infrastructure definition
+├── ansible.cfg                      # Ansible configuration
+├── inventory.yaml                   # Generated Ansible inventory (by Terraform)
+├── playbook_all.yaml               # Master orchestration playbook
+├── playbook_nomad_server.yaml      # Server configuration playbook
+├── playbook_nomad_client.yaml      # Client configuration playbook
+├── playbook_localhost.yaml         # Local environment setup playbook
+├── templates/                       # Jinja2 configuration templates
+│   ├── nomad_server.hcl.j2         # Nomad server configuration
+│   ├── nomad_client.hcl.j2         # Nomad client configuration
+│   └── consul_client.hcl.j2        # Consul client configuration
+├── workload-identity/              # Vault workload identity setup scripts
+├── .tls/                           # Generated TLS certificates (by Terraform)
+│   ├── ca.pem                      # CA certificate
+│   ├── ca-key.pem                  # CA private key
+│   ├── nomad-server-*.pem          # Server certificates
+│   ├── nomad-server-*-key.pem      # Server private keys
+│   ├── nomad-client-*.pem          # Client certificates
+│   └── nomad-client-*-key.pem      # Client private keys
+├── .envrc                          # Generated environment variables (by Ansible)
+└── generated_nomad_root_bootstrap_token  # Placeholder token file (by Ansible)
+```
 
-## What the Ansible Playbooks Do
+## Infrastructure Components
 
-### [`playbook_all.yaml`](playbook_all.yaml:1)
-Master playbook that orchestrates the deployment:
-- Imports [`playbook_nomad_server.yaml`](playbook_nomad_server.yaml:1)
-- Imports [`playbook_nomad_client.yaml`](playbook_nomad_client.yaml:1)
-- Imports `playbook_localhost.yaml` (local configuration)
+### Complete File Explanations
 
-### [`playbook_nomad_server.yaml`](playbook_nomad_server.yaml:1)
-Configures Nomad server nodes:
+#### [`main.tf`](main.tf) - Terraform Infrastructure
 
-1. **Fact Gathering**: Delegates fact collection for controlled restarts
+Provisions the complete infrastructure using reusable modules.
 
-2. **Common Role**: Base system setup
+**Variables**:
+- `consul_address`: Optional Consul server address (format: `IP:8500`)
+- `vault_address`: Optional Vault server address (format: `https://IP:8200`)
+
+**Modules**:
+1. **`ca`**: Creates TLS Certificate Authority
+2. **`nomad_server`**: Provisions 3 server VMs
+3. **`nomad_client`**: Provisions 2 client VMs
+4. **`ansible_provision`**: Runs Ansible playbooks
+
+**Outputs**: SSH commands, API endpoints, CA certificate
+
+#### [`ansible.cfg`](ansible.cfg) - Ansible Settings
+
+```ini
+[defaults]
+roles_path=../../shared/ansible/roles  # Shared roles location
+host_key_checking=False                # Skip SSH host key verification
+interpreter_python=auto_silent         # Auto-detect Python
+```
+
+#### `inventory.yaml` - Dynamic Inventory
+
+Generated by Terraform. Contains VM IPs and Ansible groups (`nomad_server`, `nomad_client`).
+
+#### [`.envrc`](.envrc) - Environment Variables
+
+Generated by [`playbook_localhost.yaml`](playbook_localhost.yaml). Contains:
+- `NOMAD_TOKEN`: ACL token (update after bootstrap)
+- `NOMAD_ADDR`: Server API endpoint
+- `NOMAD_CACERT`: CA certificate path
+- `NOMAD_CLIENT_CERT`: Client certificate path
+- `NOMAD_CLIENT_KEY`: Client key path
+
+**Usage**: `source .envrc` before using Nomad CLI
+
+#### `.tls/` - TLS Certificates
+
+Generated by Terraform and Ansible:
+- `ca.pem`, `ca-key.pem`: Certificate Authority
+- `nomad-server-*.pem`: Server certificates (DNS: `server.lcy1.nomad`)
+- `nomad-client-*.pem`: Client certificates (DNS: `client.lcy1.nomad`)
+
+## Ansible Playbooks Explained
+
+### [`playbook_all.yaml`](playbook_all.yaml) - Master Orchestration
+
+Coordinates deployment in correct order:
+1. Configure servers ([`playbook_nomad_server.yaml`](playbook_nomad_server.yaml))
+2. Configure clients ([`playbook_nomad_client.yaml`](playbook_nomad_client.yaml))
+3. Setup local environment ([`playbook_localhost.yaml`](playbook_localhost.yaml))
+
+### [`playbook_nomad_server.yaml`](playbook_nomad_server.yaml) - Server Configuration
+
+**Roles Applied** (in order):
+
+1. **common** - Base system setup
    - Sets hostname
    - Installs: build-essential, git, jq, make, net-tools, unzip
 
-3. **Golang Role**: Installs Go 1.25.5
-   - For building Nomad from source if needed
+2. **gantsign.golang** - Go compiler
+   - Version: 1.25.5
    - GOPATH: `/home/<user>/go`
 
-4. **TLS Role**: Generates server certificates
-   - Agent-specific certificates
+3. **tls** - TLS certificates
+   - Generates server certificates
    - DNS: `server.lcy1.nomad`
-   - IP: VM's default IPv4 address
+   - IP: VM's primary IP
 
-5. **Consul Role** (optional, when `consul_address` provided):
+4. **consul** (optional) - Service discovery
    - Version: 1.22.6
-   - Client mode
-   - Config: [`consul_client.hcl.j2`](templates/consul_client.hcl.j2:1)
+   - Mode: Client
    - Joins specified Consul server
 
-6. **Nomad Role**: Installs and configures Nomad
+5. **nomad** - Nomad server
    - Version: 2.0.0-beta.1
-   - Config: [`nomad_server.hcl.j2`](templates/nomad_server.hcl.j2:1)
-   - TLS enabled with generated certificates
+   - Mode: Server with Raft consensus
+   - TLS enabled, ACLs enabled
 
-### [`playbook_nomad_client.yaml`](playbook_nomad_client.yaml:1)
-Configures Nomad client nodes:
+### [`playbook_nomad_client.yaml`](playbook_nomad_client.yaml) - Client Configuration
 
-1. **Network Configuration**: Removes Ubuntu default network link file
-   - Fixes issues with Smuggle CNI plugin
+**Roles Applied** (in order):
 
-2. **dnsmasq Role**: DNS forwarding setup
-   - Forwards `.nomad` queries to CoreDNS (port 1053)
-   - Listens on localhost and VM IP
-   - Upstream DNS: 1.1.1.1, 8.8.8.8, 8.8.4.4
+1. **dnsmasq** - DNS forwarding
+   - Forwards `.nomad` to CoreDNS (port 1053)
+   - Upstream: 1.1.1.1, 8.8.8.8, 8.8.4.4
 
-3. **Common Role**: Base system setup
+2. **common** - Base system + Podman
    - Installs: build-essential, git, jq, make, podman, net-tools, unzip
 
-4. **Golang Role**: Installs Go 1.25.5
+3. **gantsign.golang** - Go compiler
 
-5. **CNI Role**: Configures Container Network Interface
-   - Creates `vxlan.conf` for Smuggle plugin
+4. **cni** - Container networking
+   - Version: 1.9.0
+   - Creates `vxlan.conf` for Smuggle
 
-6. **Smuggle Role**: Installs Smuggle CNI plugin
-   - VXLAN overlay networking for containers
+5. **smuggle** - VXLAN overlay networking
 
-7. **Docker Role**: Installs Docker
+6. **geerlingguy.docker** - Docker runtime
    - Version: containerd.io 2.2.0
    - Adds user to docker group
 
-8. **TLS Role**: Generates client certificates
+7. **tls** - Client certificates
    - DNS: `client.lcy1.nomad`
 
-9. **Helper Role**: Kernel module configuration
-   - Loads `bridge` module for networking
+8. **helper** - Kernel modules
+   - Loads `bridge` module
 
-10. **Consul Role** (optional): Client mode configuration
+9. **consul** (optional) - Service discovery client
 
-11. **Nomad Role**: Installs Nomad with plugins
+10. **nomad** - Nomad client
     - Version: 2.0.0-beta.1
-    - Config: [`nomad_client.hcl.j2`](templates/nomad_client.hcl.j2:1)
-    - Plugins: nomad-driver-podman 0.6.4
-    - TLS enabled
+    - Drivers: raw_exec, docker, podman
+    - Plugin: nomad-driver-podman 0.6.4
 
-## Configuration Details
+### [`playbook_localhost.yaml`](playbook_localhost.yaml) - Local Environment
 
-### Nomad Server ([`nomad_server.hcl.j2`](templates/nomad_server.hcl.j2:1))
+**What it does**:
+1. Creates `generated_nomad_root_bootstrap_token` with placeholder
+2. Creates `.envrc` with environment variables for CLI access
 
-Key settings:
-- **Region**: lcy1
-- **Log Level**: DEBUG with location tracking
+## Configuration Templates
+
+### [`templates/nomad_server.hcl.j2`](templates/nomad_server.hcl.j2)
+
+**Key Sections**:
+- **Data/Binding**: Data dir, bind address, region
+- **Logging**: DEBUG level with location tracking
 - **Telemetry**: Prometheus metrics enabled
-- **Server Mode**: 
-  - Bootstrap expect: 3 servers
-  - Retry join: All server IPs
-  - WAL log store (64MB segments)
-- **ACLs**: Enabled
-- **UI**: Enabled with "local lcy1" purple label
-- **Consul Integration** (optional): Connects to local Consul agent
-- **Vault Integration** (optional): 
-  - Workload identity enabled
-  - JWT auth with 1h TTL
-  - Audience: vault.io
+- **Server**: Raft consensus, bootstrap expect 3, WAL log store
+- **ACL**: Enabled (requires bootstrap)
+- **Consul**: Optional integration
+- **UI**: Enabled with purple "local lcy1" label
+- **Vault**: Optional workload identity
 
-### Nomad Client ([`nomad_client.hcl.j2`](templates/nomad_client.hcl.j2:1))
+### [`templates/nomad_client.hcl.j2`](templates/nomad_client.hcl.j2)
 
-Key settings:
-- **Region**: lcy1
-- **Log Level**: DEBUG
-- **Telemetry**: Prometheus metrics enabled
-- **Client Mode**: Enabled
-- **Server Join**: Retry join all server IPs
-- **ACLs**: Enabled
-- **Plugins**:
-  - raw_exec: Enabled
-  - docker: Enabled (via Docker installation)
-  - podman: Enabled (via plugin)
-- **Consul Integration** (optional): Local agent connection
-- **Vault Integration** (optional): JWT auth backend
+**Key Sections**:
+- **Data/Binding**: Data dir, bind address, region, plugin dir
+- **Logging**: DEBUG level
+- **Telemetry**: Prometheus metrics
+- **Client**: Enabled, retry join servers
+- **ACL**: Enabled
+- **Consul**: Optional integration
+- **Drivers**: raw_exec enabled
+- **Vault**: Optional JWT auth
 
-### Consul Client ([`consul_client.hcl.j2`](templates/consul_client.hcl.j2:1))
+### [`templates/consul_client.hcl.j2`](templates/consul_client.hcl.j2)
 
-When Consul integration is enabled:
+**Key Sections**:
 - **Mode**: Client (not server)
 - **Datacenter**: lcy1
-- **Retry Join**: Connects to provided Consul server address
+- **Retry Join**: Connects to specified Consul server
 - **Connect**: Service mesh enabled
 
-## Prerequisites
+## Deployment Guide
 
-- **Multipass**: Install from [multipass.run](https://multipass.run)
-- **Terraform**: v1.0 or later
-- **Ansible**: v2.9 or later
-- **SSH Key**: `~/.ssh/id_rsa.pub` must exist
-- **Optional**: Running Consul server (for integration)
-- **Optional**: Running Vault server (for integration)
+### Prerequisites
 
-## Deployment Instructions
+```bash
+# Install tools
+brew install multipass terraform  # macOS
+pip3 install ansible
 
-### 1. Basic Deployment (Nomad Only)
+# Verify SSH key
+ls ~/.ssh/id_rsa.pub
+```
+
+### Scenario 1: Standalone Nomad
 
 ```bash
 cd lab/multipass/nomad-cluster
@@ -201,116 +285,73 @@ terraform init
 terraform apply
 ```
 
-### 2. Deployment with Consul Integration
+### Scenario 2: Nomad + Consul
 
-First, deploy a Consul server:
 ```bash
-cd lab/multipass/consul-single-machine
-terraform init
+# Deploy Consul first
+cd ../consul-single-machine
 terraform apply
-# Note the consul_server_address output
+# Note consul_server_address output
+
+# Deploy Nomad with Consul
+cd ../nomad-cluster
+terraform apply -var="consul_address=192.168.64.5:8500"
 ```
 
-Then deploy Nomad cluster:
-```bash
-cd lab/multipass/nomad-cluster
-terraform init
-terraform apply -var="consul_address=<consul-server-ip>:8500"
-```
+### Scenario 3: Full Stack (Nomad + Consul + Vault)
 
-### 3. Deployment with Vault Integration
-
-Deploy Vault server, then:
 ```bash
+# Deploy Consul
+cd ../consul-single-machine
+terraform apply
+
+# Deploy Vault
+cd ../vault-single-machine
+terraform apply
+
+# Initialize Vault
+ssh <vault-ip>
+vault operator init -key-shares=1 -key-threshold=1
+vault operator unseal <key>
+
+# Deploy Nomad
+cd ../nomad-cluster
 terraform apply \
   -var="consul_address=<consul-ip>:8500" \
   -var="vault_address=https://<vault-ip>:8200"
 ```
 
-### 4. Access the Cluster
+## Nomad and Consul Integration
 
-After deployment, Terraform outputs connection details:
+### Service Registration Flow
 
 ```
-SSH commands:
-  Nomad Servers:
-    - ssh 192.168.64.X
-    - ssh 192.168.64.Y
-    - ssh 192.168.64.Z
-  Nomad Client:
-    - ssh 192.168.64.A
-    - ssh 192.168.64.B
-
-Nomad HTTP API:
-    - https://192.168.64.X:4646
-    - https://192.168.64.Y:4646
-    - https://192.168.64.Z:4646
+Nomad Job → Consul Agent → Consul Server → DNS/API
 ```
 
-### 5. Bootstrap ACLs
+### Example with Service Discovery
 
-SSH into any server and bootstrap:
-```bash
-ssh 192.168.64.X
-nomad acl bootstrap
-```
-
-Save the Secret ID (management token).
-
-### 6. Configure Local Nomad CLI
-
-Export the CA certificate:
-```bash
-terraform output -raw nomad_ca_cert_pem > nomad-ca.pem
-```
-
-Set environment variables:
-```bash
-export NOMAD_ADDR=https://192.168.64.X:4646
-export NOMAD_CACERT=nomad-ca.pem
-export NOMAD_TOKEN=<management-token-from-bootstrap>
-```
-
-### 7. Verify Cluster
-
-```bash
-nomad server members
-nomad node status
-```
-
-Expected output:
-```
-# Server members
-Name                    Address       Port  Status  Leader  Raft Version
-nomad-server-abc123.lcy1  192.168.64.X  4648  alive   true    3
-
-# Node status
-ID        DC    Name                 Class   Drain  Eligibility  Status
-abc123    lcy1  nomad-client-xyz     <none>  false  eligible     ready
-def456    lcy1  nomad-client-uvw     <none>  false  eligible     ready
-```
-
-## Usage Examples
-
-### Deploy a Job
-
-Create `example.nomad`:
 ```hcl
-job "example" {
-  datacenters = ["lcy1"]
-  
-  group "web" {
-    count = 3
-    
+job "web" {
+  group "app" {
     network {
-      port "http" {
-        to = 8080
+      port "http" { to = 8080 }
+    }
+    
+    service {
+      name     = "web"
+      port     = "http"
+      provider = "consul"
+      
+      check {
+        type     = "http"
+        path     = "/health"
+        interval = "10s"
       }
     }
     
     task "server" {
       driver = "docker"
-      
       config {
         image = "nginx:alpine"
         ports = ["http"]
@@ -320,52 +361,90 @@ job "example" {
 }
 ```
 
-Deploy:
+### DNS Resolution
+
 ```bash
-nomad job run example.nomad
-nomad job status example
+# Query Consul DNS
+dig @localhost -p 8600 web.service.consul
+
+# Query via dnsmasq
+dig web.service.consul
 ```
 
-### Access Nomad UI
+## Post-Deployment Configuration
 
-Open browser to any server IP:
+### 1. Bootstrap ACLs
+
+```bash
+ssh $(terraform output -json nomad_server_addresses | jq -r '.[0]')
+nomad acl bootstrap
+# Save the Secret ID!
 ```
-https://192.168.64.X:4646
+
+### 2. Configure Local CLI
+
+```bash
+# Update .envrc with real token
+vim .envrc
+source .envrc
+
+# Verify
+nomad server members
+nomad node status
 ```
 
-Accept the self-signed certificate warning, then enter your management token.
+### 3. Create ACL Policies
 
-### Deploy with Podman Driver
+```hcl
+# developer-policy.hcl
+namespace "default" {
+  policy = "write"
+}
+```
+
+```bash
+nomad acl policy apply developer developer-policy.hcl
+nomad acl token create -name="dev" -policy=developer
+```
+
+## Usage Examples
+
+### Simple Web Service
+
+```hcl
+job "nginx" {
+  datacenters = ["lcy1"]
+  
+  group "web" {
+    count = 3
+    
+    network {
+      port "http" { to = 80 }
+    }
+    
+    task "server" {
+      driver = "docker"
+      config {
+        image = "nginx:alpine"
+        ports = ["http"]
+      }
+    }
+  }
+}
+```
+
+### Using Podman
 
 ```hcl
 task "app" {
   driver = "podman"
-  
   config {
-    image = "docker.io/library/nginx:alpine"
-    ports = ["http"]
+    image = "docker.io/library/redis:alpine"
   }
 }
 ```
 
-### Use Service Discovery (with Consul)
-
-```hcl
-service {
-  name = "web"
-  port = "http"
-  provider = "consul"
-  
-  check {
-    type     = "http"
-    path     = "/health"
-    interval = "10s"
-    timeout  = "2s"
-  }
-}
-```
-
-### Use Vault Secrets (with Vault)
+### With Vault Secrets
 
 ```hcl
 task "app" {
@@ -376,7 +455,7 @@ task "app" {
   template {
     data = <<EOH
 {{ with secret "secret/data/app" }}
-DB_PASSWORD={{ .Data.data.password }}
+DB_PASS={{ .Data.data.password }}
 {{ end }}
 EOH
     destination = "secrets/config.env"
@@ -385,158 +464,68 @@ EOH
 }
 ```
 
-## Advanced Operations
+## Troubleshooting
 
-### Rolling Updates
-
-Update servers one at a time:
-```bash
-# Update server 1
-ansible-playbook playbook_nomad_server.yaml --limit nomad-server-0
-
-# Verify cluster health
-nomad server members
-
-# Repeat for other servers
-```
-
-### Scale Clients
-
-Modify [`main.tf`](main.tf:22):
-```hcl
-instance_count = 5  # Increase from 2 to 5
-```
-
-Then:
-```bash
-terraform apply
-```
-
-### Deploy Monitoring Stack
+### VMs Not Starting
 
 ```bash
-# From the nomad-cluster directory
-nomad job run ../../shared/jobs/monitoring/prometheus-server.nomad.hcl
-nomad job run ../../shared/jobs/monitoring/grafana-server.nomad.hcl
+multipass list
+multipass logs nomad-server-*
+sudo launchctl restart com.canonical.multipassd
 ```
 
-### Rsync Code for Development
+### Cluster Not Forming
 
-Use the rsync commands from Terraform output to sync local Nomad source:
 ```bash
-rsync -r --exclude 'nomad/ui/node_modules/*' \
-  /path/to/nomad \
-  ubuntu@192.168.64.X:/home/ubuntu/
+# Check logs
+ssh <server-ip> "sudo journalctl -u nomad -f"
+
+# Verify TLS
+openssl x509 -in .tls/nomad-server-0.pem -text -noout
+
+# Test connectivity
+ssh <server-ip> "telnet <other-server-ip> 4647"
+```
+
+### Client Not Connecting
+
+```bash
+# Check status
+ssh <client-ip> "sudo systemctl status nomad"
+
+# Check logs
+ssh <client-ip> "sudo journalctl -u nomad -f"
+
+# Verify can reach servers
+ssh <client-ip> "telnet <server-ip> 4647"
+```
+
+### Docker/Podman Issues
+
+```bash
+ssh <client-ip> "docker ps"
+ssh <client-ip> "podman ps"
+ssh <client-ip> "sudo systemctl status docker"
+```
+
+### DNS Not Working
+
+```bash
+ssh <client-ip> "dig @localhost web.service.nomad"
+ssh <client-ip> "sudo systemctl status dnsmasq"
 ```
 
 ## Cleanup
 
-### Destroy Infrastructure
-
 ```bash
 terraform destroy
-```
-
-Type `yes` when prompted.
-
-### Manual VM Cleanup (if needed)
-
-```bash
-multipass list
-multipass delete nomad-server-* nomad-client-*
+# or
+multipass delete nomad-*
 multipass purge
 ```
-
-## Configuration Files
-
-- [`main.tf`](main.tf:1): Terraform infrastructure definition
-- [`ansible.cfg`](ansible.cfg:1): Ansible configuration
-- [`inventory.yaml`](inventory.yaml:1): Generated Ansible inventory
-- [`playbook_all.yaml`](playbook_all.yaml:1): Master playbook
-- [`playbook_nomad_server.yaml`](playbook_nomad_server.yaml:1): Server configuration
-- [`playbook_nomad_client.yaml`](playbook_nomad_client.yaml:1): Client configuration
-- [`templates/nomad_server.hcl.j2`](templates/nomad_server.hcl.j2:1): Server config template
-- [`templates/nomad_client.hcl.j2`](templates/nomad_client.hcl.j2:1): Client config template
-- [`templates/consul_client.hcl.j2`](templates/consul_client.hcl.j2:1): Consul client template
-
-## Troubleshooting
-
-### VMs Not Starting
-```bash
-multipass list
-multipass info nomad-server-*
-multipass logs nomad-server-*
-```
-
-### Nomad Server Not Joining Cluster
-```bash
-ssh 192.168.64.X "sudo journalctl -u nomad -f"
-ssh 192.168.64.X "nomad server members"
-```
-
-### Nomad Client Not Connecting
-```bash
-ssh 192.168.64.A "sudo systemctl status nomad"
-ssh 192.168.64.A "nomad node status"
-```
-
-### TLS Certificate Issues
-```bash
-# Verify certificates exist
-ls -la .tls/
-
-# Check certificate validity
-openssl x509 -in .tls/nomad-server-0.pem -text -noout
-```
-
-### Docker/Podman Issues
-```bash
-ssh 192.168.64.A "docker ps"
-ssh 192.168.64.A "podman ps"
-ssh 192.168.64.A "sudo systemctl status docker"
-```
-
-### DNS Resolution Issues
-```bash
-ssh 192.168.64.A "dig @localhost web.service.nomad"
-ssh 192.168.64.A "sudo systemctl status dnsmasq"
-```
-
-## Performance Tuning
-
-### Increase VM Resources
-
-Modify [`main.tf`](main.tf:1):
-```hcl
-module "nomad_server" {
-  instance_cpus   = 4      # Increase from 2
-  instance_memory = "8GiB" # Increase from 4GiB
-}
-```
-
-### Optimize Raft Performance
-
-Edit [`nomad_server.hcl.j2`](templates/nomad_server.hcl.j2:28):
-```hcl
-raft_logstore {
-  backend = "wal"
-  wal {
-    segment_size_mb = 128  # Increase from 64
-  }
-}
-```
-
-## Next Steps
-
-- **Deploy Workloads**: Use job specifications from `../../shared/jobs/`
-- **Enable Monitoring**: Deploy Prometheus and Grafana
-- **Configure Autoscaling**: Deploy Nomad Autoscaler
-- **Multi-Region**: Deploy additional clusters in different regions
-- **Production Hardening**: Implement proper ACL policies and TLS certificate management
 
 ## Related Configurations
 
 - [`consul-single-machine`](../consul-single-machine/): Standalone Consul server
 - [`vault-single-machine`](../vault-single-machine/): Standalone Vault server
 - [`nomad-dev-cluster`](../nomad-dev-cluster/): Simplified development cluster
-- [`nomad-single-machine`](../nomad-single-machine/): All-in-one Nomad instance
