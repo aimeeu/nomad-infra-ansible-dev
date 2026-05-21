@@ -11,11 +11,19 @@
 # The ACL root token storage file.
 .nomad_root_token
 
-# Terraform state and modules.
-terraform.tfstate
-terraform.tfstate.backup
-.terraform.tfstate.lock.info
-.terraform
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+.terraform/
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
 
 # Terraform generate SSH keys.
 keys/
@@ -32,3 +40,10 @@ geerlingguy.docker/
 
 # Generated files from TF runs that use templates to write out to local disk.
 generated_*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
