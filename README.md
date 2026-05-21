@@ -251,3 +251,24 @@ See original repository for license information.
 ## Acknowledgments
 
 Forked from [jrasell/dev-mess](https://github.com/jrasell/dev-mess) - thanks for the excellent foundation!
+
+Original repo [README contents](https://github.com/jrasell/dev-mess)
+
+
+My little slice of development chaos including infrastructure tooling and
+workstation configurations I use.
+
+* [code](./code): Various pieces of code I have written for different purposes
+  such as exploration, benchmarking, or testing.
+
+* [lab](./lab): Shared configuration objects and implementations which can be
+  used for testing, debugging, and running applications; notably Nomad. A number
+  of styles can be run depending on requirements. AWS provides the cloud
+  deployment option, Multipass for local VMs, and local for running on the base
+  host.
+
+* [tools](./tools): Various tools and utilities I have written for different
+  purposes.
+
+* [workstation](./workstation): Configuration options I use for local
+  workstations which usually consist of macOS and Linux machines.
