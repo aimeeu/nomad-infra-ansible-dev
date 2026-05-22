@@ -13,9 +13,9 @@ _preflight:
     @if ! command -v ansible-playbook >/dev/null 2>&1; then echo "error: missing 'ansible-playbook'" >&2; exit 1; fi
     @if ! command -v jq              >/dev/null 2>&1; then echo "error: missing 'jq'" >&2; exit 1; fi
     @if ! command -v multipass       >/dev/null 2>&1; then echo "error: missing 'multipass'" >&2; exit 1; fi
-    @if ! command -v nomad           >/dev/null 2>&1; then echo "error: missing 'nomad'" >&2; exit 1; fi
-    @if ! command -v terraform       >/dev/null 2>&1; then echo "error: missing 'terraform'" >&2; exit 1; fi
-    @if ! command -v vault           >/dev/null 2>&1; then echo "error: missing 'vault'" >&2; exit 1; fi
+    @if ! command -v nomad           >/dev/null 2>&1; then echo "error: missing 'nomad cli'" >&2; exit 1; fi
+    @if ! command -v terraform       >/dev/null 2>&1; then echo "error: missing 'terraform cli'" >&2; exit 1; fi
+    @if ! command -v vault           >/dev/null 2>&1; then echo "error: missing 'vault cli'" >&2; exit 1; fi
 
 _hashistack_refresh_envrc:
     : > .envrc

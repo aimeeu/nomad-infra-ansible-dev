@@ -7,6 +7,7 @@ module "consul_server" {
   instance_memory      = "2GiB"
   instance_name_prefix = "consul-server"
   instance_ssh_key     = file("~/.ssh/id_rsa.pub")
+  #instance_ssh_key = var.instance_ssh_key
 }
 
 module "ansible_provision" {
