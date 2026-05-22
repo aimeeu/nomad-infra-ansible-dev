@@ -42,13 +42,13 @@ variable "instance_ssh_key" {
 variable "instance_ssh_user" {
   description = "The SSH user to add the key from instance_ssh_key to."
   type        = string
-  default     = "jrasell"
+  default     = "aimeeu"
 }
 
 variable "ansible_user" {
   description = "The user Ansible uses for connectivity."
   type        = string
-  default     = "jrasell"
+  default     = "aimeeu"
 }
 
 variable "ansible_group_name" {
